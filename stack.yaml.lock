@@ -53,6 +53,27 @@ packages:
       sha256: a26845b08d0d78894b1df747eceb3907515e9be208dd239c4a8083e7f6bf804e
   original:
     hackage: text-format-heavy-0.1.5.3@sha256:abbc5f0c4883328df4058cf2145820eaf41c35d1af9cdacc50fc2e4c2bd15dda,2755
+- completed:
+    size: 14231
+    url: https://github.com/Gabriel439/Haskell-Pipes-Concurrency-Library/archive/9b2d76fdbbaca7cca15f94bae3b0833a217347c8.tar.gz
+    cabal-file:
+      size: 1803
+      sha256: 4fc4336840440e3664d5e9c0684cf8ad0ddf9d919bd0dadcdfc96cd93ef31a34
+    name: pipes-concurrency
+    version: 2.0.12
+    sha256: f8ac81b172a27f421f831d7aeefee18250d8bc750d7879b0102ed11d1bf5534f
+    pantry-tree:
+      size: 830
+      sha256: 6dd684c718eb8a18a0ecb32a9b34767b3c6074907ae25c5d29ffd657c4a34dc6
+  original:
+    url: https://github.com/Gabriel439/Haskell-Pipes-Concurrency-Library/archive/9b2d76fdbbaca7cca15f94bae3b0833a217347c8.tar.gz
+- completed:
+    hackage: stm-2.5.0.0@sha256:c238075f9f0711cd6a78eab6001b3e218cdaa745d6377bf83cc21e58ceec2ea1,2100
+    pantry-tree:
+      size: 898
+      sha256: 8ef9688d399f931a040d5d316ef8d40efacc14fcb099eba637adb7d00e75ecde
+  original:
+    hackage: stm-2.5.0.0@sha256:c238075f9f0711cd6a78eab6001b3e218cdaa745d6377bf83cc21e58ceec2ea1,2100
 snapshots:
 - completed:
     size: 524799

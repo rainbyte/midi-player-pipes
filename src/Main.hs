@@ -208,16 +208,16 @@ main = do
       streamIdxVar <- newMVar 0
       cmdVar <- newEmptyMVar
 
-      (outputPlayer, inputPlayer) <- spawn unbounded
-      (outputClock, inputClock) <- spawn unbounded
-      (outputMidi, inputMidi) <- spawn unbounded
+      mbPlayer <- spawn unbounded
+      mbClock <- spawn unbounded
+      mbMidi <- spawn unbounded
 
       _ <- forkIO $ runEffect $
-        fromInput inputPlayer >-> midiPlayer >-> toOutput (outputClock <> outputMidi)
+        fromMailbox mbPlayer >-> midiPlayer >-> toMailbox (mbClock <> mbMidi)
       _ <- forkIO $ runEffect $
-        fromInput inputClock >-> clockHandler >-> toOutput outputPlayer
+        fromMailbox mbClock >-> clockHandler >-> toMailbox mbPlayer
       _ <- forkIO $ runEffect $
-        fromInput inputMidi >-> outputHandler streamIdxVar (fmap snd streams)
+        fromMailbox mbMidi >-> outputHandler streamIdxVar (fmap snd streams)
 
       _ <- forkIO $ forever $ do
         ev <- takeMVar cmdVar
@@ -225,7 +225,7 @@ main = do
           (SelPort idx) -> do
             putStrLn $ "SelPort " ++ show idx
             swapMVar streamIdxVar idx $> ()
-          _             -> atomically $ send outputPlayer ev $> ()
+          _             -> atomically $ send' mbPlayer ev $> ()
 
       htmlGUI cmdVar (fmap fst streams)
       exitSuccess

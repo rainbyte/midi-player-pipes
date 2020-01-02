@@ -48,6 +48,9 @@ extra-deps:
   commit: 21ddd4b4872b2e7eb50c9735e70cfbdedf2c6c1a
 - jmacro-0.6.17@sha256:3a1e6ae8e1c3f8d9984036f27b2207f532655f93740e0c90b253dcace33c9679,2901
 - text-format-heavy-0.1.5.3@sha256:abbc5f0c4883328df4058cf2145820eaf41c35d1af9cdacc50fc2e4c2bd15dda,2755
+- github: Gabriel439/Haskell-Pipes-Concurrency-Library
+  commit: 9b2d76fdbbaca7cca15f94bae3b0833a217347c8
+- stm-2.5.0.0@sha256:c238075f9f0711cd6a78eab6001b3e218cdaa745d6377bf83cc21e58ceec2ea1,2100
 
 # Override default flag values for local packages and extra-deps
 # flags: {}
