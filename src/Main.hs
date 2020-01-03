@@ -31,9 +31,9 @@ import qualified HtmlGUI as UI
 type MidiCmd = Either String PM.PMMsg
 type MidiTimed = (Rational, [MidiCmd])
 
-data PlayerInput = LoadMidi ![MidiTimed] | PlayPause | Stop | Tick | Tock
+data PlayerInput = LoadMidi ![MidiTimed] | PlayPause | Stop | Tick | Tock | PProgress
 
-data PlayerEvent = NoEvent | Clock | Midi !MidiTimed | Delay Rational
+data PlayerEvent = NoEvent | Clock | Midi !MidiTimed | Delay Rational | Progress Rational String
   deriving Show
 
 data MidiPlayerStatus
@@ -105,6 +105,16 @@ outputHandler streamIdxVar streams = forever $ do
         Left err -> putStrLn $ "Error: " ++ show err
     handleMidiCmd _ (Left str) = putStrLn ("Output: " ++ str)
 
+progressHandler :: MVar UI.UIStatus -> Consumer PlayerEvent IO ()
+progressHandler uiStatusVar = forever $ do
+  ev <- await
+  liftIO $ case ev of
+    Progress pos msg -> modifyMVar_ uiStatusVar (newUiStatus pos msg)
+    _          -> pure ()
+  where
+    newUiStatus pos msg uiStatus = pure $ uiStatus
+      { UI.progress = fromRational pos, UI.display = msg }
+
 clockHandler :: Pipe PlayerEvent PlayerInput IO ()
 clockHandler = forever $ do
   ev <- await
@@ -113,8 +123,8 @@ clockHandler = forever $ do
       let microsecs = round $ t * (10^(6::Int))
       lift $ atomically . waitDelay =<< newDelay microsecs
       yield Tock
-    Midi _ -> yield Tick
-    Clock -> yield Tick
+    Midi _ -> yield PProgress *> yield Tick
+    Clock  -> yield PProgress *> yield Tick
     _ -> pure ()
 
 handleInput :: PlayerInput -> MidiPlayerStatus -> (PlayerEvent, MidiPlayerStatus)
@@ -122,16 +132,25 @@ handleInput ev status =
   case (status, ev) of
     (_, LoadMidi l) -> (notesOff, Stopped l)
     (Stopped remain        , PlayPause) -> (Clock, Playing remain [])
-    (Paused  []      played, PlayPause) -> (NoEvent, Stopped $ reverse played)
+    (Stopped _             , PProgress) -> (Progress 0 "stopped", status)
+    (Paused  []      played, PlayPause) -> (notesOff, Stopped $ reverse played)
     (Paused  remain  played, PlayPause) -> (Clock, Playing remain played)
-    (Paused  remain  played, Stop)      -> (NoEvent, Stopped (combine remain played))
+    (Paused  remain  played, Stop)      -> (notesOff, Stopped (combine remain played))
+    (Paused  remain  played, PProgress) -> (Progress (progress remain played) "paused", status)
     (Playing remain  played, PlayPause) -> (notesOff, Paused remain played)
     (Playing remain  played, Stop)      -> (notesOff, Stopped (combine remain played))
     (Playing []      played, Tick)      -> (notesOff, Stopped $ reverse played)
     (Playing (x:_)        _, Tick)      -> (Delay (fst x), status)
     (Playing (x:xs)  played, Tock)      -> (Midi x, Playing xs (x:played))
+    (Playing remain  played, PProgress) -> (Progress (progress remain played) "playing", status)
     _ -> (NoEvent, status)
   where
+    calcTime = sum . fmap fst
+    progress :: [MidiTimed] -> [MidiTimed] -> Rational
+    progress rs ps =
+      let ptime = calcTime ps
+          rtime = calcTime rs
+      in (100 * ptime) / (rtime + ptime)
     combine = foldl (flip (:))
     notesOff :: PlayerEvent
     notesOff = Midi (0, [Right $ PM.PMMsg (0xB0 + n) 0x7B 0 | n <- [0..15]])
@@ -160,21 +179,25 @@ main = do
     _:_ -> do
       streamIdxVar <- newMVar 0
       cmdVar <- newEmptyMVar
+      uiStatusVar <- newMVar UI.UIStatus { UI.progress = 0, UI.display = "stopped" }
 
       mbPlayer <- spawn unbounded
       mbClock <- spawn unbounded
       mbMidi <- spawn unbounded
+      mbProgress <- spawn unbounded
 
       _ <- forkIO $ runEffect $
-        fromMailbox mbPlayer >-> midiPlayer >-> toMailbox (mbClock <> mbMidi)
+        fromMailbox mbPlayer >-> midiPlayer >-> toMailbox (mbClock <> mbMidi <> mbProgress)
       _ <- forkIO $ runEffect $
         fromMailbox mbClock >-> clockHandler >-> toMailbox mbPlayer
       _ <- forkIO $ runEffect $
         fromMailbox mbMidi >-> outputHandler streamIdxVar (fmap snd streams)
       _ <- forkIO $ runEffect $
+        fromMailbox mbProgress >-> progressHandler uiStatusVar
+      _ <- forkIO $ runEffect $
         listenerUiCmd cmdVar streamIdxVar >-> toMailbox mbPlayer
 
-      htmlGUI cmdVar (fmap fst streams)
+      htmlGUI uiStatusVar cmdVar (fmap fst streams)
       exitSuccess
     [] -> do
       _ <- error "Output device not available"
