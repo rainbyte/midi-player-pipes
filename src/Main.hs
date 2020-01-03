@@ -5,6 +5,7 @@
 module Main where
 
 import           Control.Concurrent hiding (yield)
+import           Control.Concurrent.STM.Delay (newDelay, waitDelay)
 import           Control.Monad
 
 import qualified Data.ByteString.Lazy as BL
@@ -145,7 +146,8 @@ clockHandler = forever $ do
   ev <- await
   case ev of
     Clock (ClockWait t) -> do
-      lift $ threadDelay (round $ t * (10^(6::Int)))
+      let microsecs = round $ t * (10^(6::Int))
+      lift $ atomically . waitDelay =<< newDelay microsecs
       yield Tick
     _ -> pure ()
 

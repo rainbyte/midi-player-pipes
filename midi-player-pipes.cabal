@@ -26,6 +26,7 @@ executable midi-player-pipes
                      , pipes
                      , pipes-concurrency
                      , PortMidi
+                     , stm-delay
                      , text
                      , time
                      , webviewhs
