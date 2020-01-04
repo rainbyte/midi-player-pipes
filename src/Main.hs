@@ -1,6 +1,4 @@
 {-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE QuasiQuotes #-}
-{-# LANGUAGE ViewPatterns #-}
 
 module Main where
 
@@ -9,14 +7,9 @@ import           Control.Concurrent.STM.Delay (newDelay, waitDelay)
 import           Control.Monad
 
 import qualified Data.ByteString.Lazy as BL
-import           Data.Functor (($>))
+
 import           Data.Maybe (catMaybes)
 import qualified Data.Text as T
-import qualified Data.Text.Read as TR
-import           Data.Time.Clock
-
-import qualified Graphics.UI.Webviewhs as WHS
-import           Language.Javascript.JMacro
 
 import           Pipes
 import           Pipes.Concurrent
@@ -31,11 +24,14 @@ import           System.Directory
 import           System.Exit
 
 
+import           HtmlGUI (UICmd, htmlGUI)
+import qualified HtmlGUI as UI
+
+
 type MidiCmd = Either String PM.PMMsg
 type MidiTimed = (Rational, [MidiCmd])
 
-data UICmd = SelPort Int | LoadMidi ![MidiTimed] | PlayPause | Stop | Tick | Tock
-  deriving Show
+data PlayerInput = LoadMidi ![MidiTimed] | PlayPause | Stop | Tick | Tock
 
 data PlayerEvent = NoEvent | Clock | Midi !MidiTimed | Delay Rational
   deriving Show
@@ -64,67 +60,24 @@ midiFromPath path = do
     putStrLn $ "File " ++ path ++ " does not exist"
     putStrLn "Try again..."
     pure Nothing
-  
-htmlGUI :: MVar UICmd -> [String] -> IO ()
-htmlGUI cmdVar portNames = void $ do
-  dir <- getCurrentDirectory
-  eitherWindow <- WHS.createWindow (windowParams dir) windowCallback
-  case eitherWindow of
-    Left  _      -> pure ()
-    Right window -> do
-      windowSetup window
-      windowLoop window
-      windowCleanup window
-      WHS.terminateWindowLoop window
-      WHS.destroyWindow window
+
+listenerUiCmd :: MVar UICmd -> MVar Int -> Producer PlayerInput IO ()
+listenerUiCmd cmdVar streamIdxVar = forever getCmd
   where
-  windowLoop :: WHS.Window a -> IO ()
-  windowLoop window = do
-    timeIni <- getCurrentTime
-    shouldContinue  <- WHS.iterateWindowLoop window False
-    timeEnd <- getCurrentTime
-    let fps = 120
-        elapsed = realToFrac (diffUTCTime timeEnd timeIni) :: Double
-        toMicros = (* 1000000)
-        nextFrame = floor $ toMicros (1/fps - elapsed)
-    -- print nextFrame
-    when shouldContinue $ do
-      when (nextFrame > 0) (threadDelay nextFrame)
-      windowLoop window
-  windowParams dir = WHS.WindowParams
-    { WHS.windowParamsTitle = "midi-player-hs"
-    , WHS.windowParamsUri = T.pack $ "file://" ++ dir ++ "/src/Main.html"
-    , WHS.windowParamsWidth = 600
-    , WHS.windowParamsHeight = 340
-    , WHS.windowParamsResizable = False
-    , WHS.windowParamsDebuggable = True
-    }
-  windowSetup window = do
-    putStrLn "Initialize GUI"
-    -- Add output ports to combobox
-    forM_ (indexed portNames) (uncurry addPort)
-    where
-    indexed = zip ([1..]::[Int])
-    addPort idx name = WHS.runJavaScript window
-      [jmacro| portAdd(`idx`, `name`); |]
-  windowCleanup _ = pure ()
-  windowCallback window msg = case msg of
-    "load"      -> WHS.withWindowOpenDialog
-      window "Open MIDI file" False openMidiFile
-    "playpause" -> enqueueCmd PlayPause
-    "stop"      -> enqueueCmd Stop
-    (parsePort -> Just idx) -> do
-      putStrLn $ "port" <> show idx
-      enqueueCmd (SelPort idx)
-    _ -> pure ()
-    where
-    parsePort = (textToInt =<<) . T.stripPrefix "port"
-    textToInt = rightToMaybe . fmap fst . TR.decimal
-    rightToMaybe = either (const Nothing) pure
+  getCmd = do
+    ev <- lift $ takeMVar cmdVar
+    case ev of
+      (UI.SelPort idx) -> lift $ do
+        putStrLn $ "SelPort " ++ show idx
+        _ <- swapMVar streamIdxVar idx
+        pure ()
+      (UI.LoadMidi path) -> openMidiFile path
+      UI.PlayPause -> yield PlayPause
+      UI.Stop -> yield Stop
   openMidiFile filename = do
-    mMidifile <- midiFromPath $ T.unpack filename
+    mMidifile <- lift $ midiFromPath $ T.unpack filename
     case mMidifile of
-      Just midifile -> enqueueCmd (LoadMidi $ preprocess midifile)
+      Just midifile -> yield (LoadMidi $ preprocess midifile)
       Nothing -> pure ()
     where
       preprocess = groupByTime . fromMidiFileRelative
@@ -134,7 +87,6 @@ htmlGUI cmdVar portNames = void $ do
         let (ps, qs) = span ((== 0) . fst) xs
             cmds = snd x : fmap snd ps
         in (fst x, cmds) : groupByTime qs
-  enqueueCmd = putMVar cmdVar
 
 outputHandler :: MVar Int -> [PM.PMStream] -> Consumer PlayerEvent IO ()
 outputHandler streamIdxVar streams = forever $ do
@@ -153,7 +105,7 @@ outputHandler streamIdxVar streams = forever $ do
         Left err -> putStrLn $ "Error: " ++ show err
     handleMidiCmd _ (Left str) = putStrLn ("Output: " ++ str)
 
-clockHandler :: Pipe PlayerEvent UICmd IO ()
+clockHandler :: Pipe PlayerEvent PlayerInput IO ()
 clockHandler = forever $ do
   ev <- await
   case ev of
@@ -165,7 +117,7 @@ clockHandler = forever $ do
     Clock -> yield Tick
     _ -> pure ()
 
-handleInput :: UICmd -> MidiPlayerStatus -> (PlayerEvent, MidiPlayerStatus)
+handleInput :: PlayerInput -> MidiPlayerStatus -> (PlayerEvent, MidiPlayerStatus)
 handleInput ev status =
   case (status, ev) of
     (_, LoadMidi l) -> (notesOff, Stopped l)
@@ -184,7 +136,7 @@ handleInput ev status =
     notesOff :: PlayerEvent
     notesOff = Midi (0, [Right $ PM.PMMsg (0xB0 + n) 0x7B 0 | n <- [0..15]])
 
-midiPlayer :: Monad m => Pipe UICmd PlayerEvent m ()
+midiPlayer :: Monad m => Pipe PlayerInput PlayerEvent m ()
 midiPlayer = loop (Stopped [])
   where
     loop status = do
@@ -219,14 +171,8 @@ main = do
         fromMailbox mbClock >-> clockHandler >-> toMailbox mbPlayer
       _ <- forkIO $ runEffect $
         fromMailbox mbMidi >-> outputHandler streamIdxVar (fmap snd streams)
-
-      _ <- forkIO $ forever $ do
-        ev <- takeMVar cmdVar
-        case ev of
-          (SelPort idx) -> do
-            putStrLn $ "SelPort " ++ show idx
-            swapMVar streamIdxVar idx $> ()
-          _             -> atomically $ send' mbPlayer ev $> ()
+      _ <- forkIO $ runEffect $
+        listenerUiCmd cmdVar streamIdxVar >-> toMailbox mbPlayer
 
       htmlGUI cmdVar (fmap fst streams)
       exitSuccess
